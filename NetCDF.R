@@ -37,7 +37,7 @@ ui <- fluidPage(theme = shinytheme("journal"),
           fancyFileInput('file', "Please upload"),
           uiOutput("UI_variables"),
           uiOutput("UI_date"),
-          uiOutput("UI_depth"),
+          conditionalPanel(condition = "input$file != NULL", uiOutput("UI_depth")),
           radioButtons("data_choice", "Choose",
                        choices = c("All", "current Date"), inline = T),
           downloadButton("downloadData", "Download"),
@@ -53,8 +53,12 @@ ui <- fluidPage(theme = shinytheme("journal"),
           tabsetPanel(
            #tabPanel("Plot", plotOutput("plot", width = 700, height = 900)),
            tabPanel("Plot",
-                    radioButtons("plot_switch", " ",
-                                 choices = c("static"), selected = "static", inline = T),
+                    fluidRow(
+                      column(6,
+                        switchInput("flip", "Flip")),
+                      column(6,
+                           radioButtons("plot_switch", " ",
+                                        choices = c("static"), selected = "static", inline = T))),
                     uiOutput("plot")),
            tabPanel("Data", dataTableOutput("table"))
           )
@@ -93,9 +97,12 @@ server <- function(input, output,session) {
     ext <- tools::file_ext(file$datapath)
     
     req(file)
-    validate(need(ext == "nc", "Please upload a NetCDF file"))
+    validate(need(ext == "nc" | ext == "nc4", "Please upload a NetCDF file"))
     
     nc <- ncdf4::nc_open(file$datapath)
+    #data <- nc
+    #nc_close(nc)
+    return(nc)
   })
 
   
@@ -132,34 +139,37 @@ server <- function(input, output,session) {
     startDate <- str_remove_all(startDate, "since")
     
     #startDate <- "1950-01-01 00:00:0.0"
+    if(all(Time == 0)){Time<-c(1:length(Time))}
     Time <- as.POSIXct(Time*Modyfier, cal = "gregorian", origin = startDate)
     Time <- as.Date(Time)
+   
+    return(Time)
     #observe(print(Time))
   })
   
   output$UI_date <- renderUI({
-    if(!is.null(file())){
-      Time <- ncvar_get(nc(), "time")
-      startDate <- ncatt_get(nc(), "time", "units")$value
-      if(str_detect(startDate, "seconds")){Units <- "day"}
-      if(str_detect(startDate, "hours")){Units <- "day"}
-      if(str_detect(startDate, "days")){Units <- "month"}
+      if(is.null(nc())){return(NULL)}
+      #Time <- ncvar_get(nc(), "time")
+      #startDate <- ncatt_get(nc(), "time", "units")$value
+      #if(str_detect(startDate, "seconds")){Units <- "day"}
+      #if(str_detect(startDate, "hours")){Units <- "day"}
+      #if(str_detect(startDate, "days")){Units <- "month"}
       #if(str_detect(startDate, "months")){Units <- "month"}
       
-      selection <- format(seq.Date(from = as.Date(Time()[1]), 
-                                   to = as.Date(Time()[length(Time())]), by = Units))
+      #selection <- format(seq.Date(from = as.Date(Time()[1]), 
+      #                             to = as.Date(Time()[length(Time())]), by = Units))
       
+      #if(!is.null(nc())){selection <- unique(Time())}else{selection <- 1}
       #dateInput("date", "Date", min = as.Date(Time()[1]), max = as.Date(Time()[length(Time())]))
       sliderTextInput("date",
                   "Dates:",
-                  choices = selection,
+                  choices = unique(Time()), #selection
                   #min = as.Date(selection[1]),
                   #max = as.Date(selection[length(selection)]),
-                  selected = as.Date(selection[1]),
+                  selected =  unique(Time())[1],# as.Date(selection[1]),
                   #timeFormat="%Y-%m-%d",
                   animate = TRUE)
 
-    }
   })
   
   output$UI_depth <- renderUI({
@@ -174,7 +184,7 @@ server <- function(input, output,session) {
       #            value = 1, step = 1, labels)
       sliderTextInput("depth", paste("Depth", unit),
                       choices = vals, selected = vals[1], grid = TRUE)
-    }
+    }else{return(NULL)}
     
   })
   
@@ -201,7 +211,8 @@ server <- function(input, output,session) {
   Latitude <- reactive({
     try(Lat <- ncvar_get(nc(), "latitude"))
     try(Lat <- ncvar_get(nc(), "lat"))
-    return(Lat)
+    try(LON <- nc()$dim$lat$vals)
+    return(sort(Lat))
   })
   
   Longitude <- reactive({
@@ -210,7 +221,8 @@ server <- function(input, output,session) {
     try(Lon <- ncvar_get(nc(), "long"))
     try(Lon <- ncvar_get(nc(), "lng"))
     try(Lon <- ncvar_get(nc(), "lon"))
-    return(Lon)
+    try(LON <- nc()$dim$lon$vals)
+    return(sort(Lon))
   })
   
   Data_All <- reactive({
@@ -239,10 +251,15 @@ server <- function(input, output,session) {
   })
   
   plot_fields <- reactive({
+    var <- Variable_NC()
+    if(length(Variable_NC())==0){return(NULL)}
+    if(input$flip){var <- var[,ncol(var):1]}
+    #observe(print(Longitude()))
+    #observe(print(Latitude()))
     #if(is.null(Longitude()) | is.null(Latitude()) | is.null(Variable_NC())){return(NULL)}else{
     fields::image.plot(Longitude(),
-                        Latitude(), 
-                       Variable_NC(),
+                       Latitude(), 
+                       var,
                        main = paste(input$nc_variables),
                        #sub = paste("Mean temp:", list2[i]),
                        xlab = "Longitude",

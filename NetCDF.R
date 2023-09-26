@@ -1,97 +1,48 @@
-#
-# This is a Shiny web application. You can run the application by clicking
-# the 'Run App' button above.
-#
-# Find out more about building applications with Shiny here:
-#
-#    http://shiny.rstudio.com/
-#
-
 options(shiny.maxRequestSize=3000*1024^2)
 library(shiny)
 library(tidyverse)
 library(fields)
 library(ncdf4)
 library(dipsaus)
-#library(PCICt)
-#library(RNetCDF)
-#library(dplyr)
 library(data.table)
 library(DT)
 library(plotly)
-#library(sp)
 library(shinyWidgets)
 library(shinythemes)
-#library(shinyFiles)
-# Define UI for application that draws a histogram
+
 ui <- fluidPage(theme = shinytheme("journal"),
-
-    # Application title
-    titlePanel("Open and Write Data from NetCDF Files"),
-    
-    # Sidebar with a slider input for number of bins 
-    sidebarLayout(
-        sidebarPanel(width = 3,
-          #shinyFilesButton('files', label='File select', title='Please select a file', multiple=FALSE),
-          #actionButton("btn_file", "Choose a NetCDF file"),
-          fancyFileInput('file', "Please upload"),
-          uiOutput("UI_variables"),
-          uiOutput("UI_date"),
-          conditionalPanel(condition = "input$file != NULL", uiOutput("UI_depth")),
-          radioButtons("data_choice", "Choose",
-                       choices = c("All", "current Date"), inline = T),
-          downloadButton("downloadData", "Download"),
-          #noUiSliderInput("lat", "Latitude", max = 90, min = -90, value = c(0,0),
-          #            orientation = "vertical",width = "80px", height = "100px"),
-          #noUiSliderInput("lon", "Longitude", max = 180, min = -180, value = c(0,0)),
-          #plotlyOutput("scatterPlot"),
-          #verbatimTextOutput("selectedValues")
-        ),
-
-        # Show a plot of the generated distribution
-        mainPanel(
-          tabsetPanel(
-           #tabPanel("Plot", plotOutput("plot", width = 700, height = 900)),
-           tabPanel("Plot",
-                    fluidRow(
-                      column(6,
-                        switchInput("flip", "Flip")),
-                      column(6,
-                           radioButtons("plot_switch", " ",
-                                        choices = c("static"), selected = "static", inline = T))),
-                    uiOutput("plot")),
-           tabPanel("Data", dataTableOutput("table"))
-          )
-        )
-    ),tags$head(tags$style(type="text/css", "
-             #loadmessage {
-               position: fixed;
-               bottom: 0px;
-               right: 0px;
-               width: 20%;
-               padding: 5px 0px 5px 0px;
-               text-align: center;
-               font-weight: bold;
-               font-size: 100%;
-               color: #000000;
-               background-color: #CCFF66;
-               z-index: 105;
-             }
-          ")),
-    conditionalPanel(condition="$('html').hasClass('shiny-busy')",
-                     tags$div("Loading...",id="loadmessage"))
-    
-
+                titlePanel("Open and Write Data from NetCDF Files"),
+                sidebarLayout(
+                  sidebarPanel(width = 3,
+                               fancyFileInput('file', "Please upload"),
+                               uiOutput("UI_variables"),
+                               uiOutput("UI_date"),
+                               conditionalPanel(condition = "input$file != NULL", uiOutput("UI_depth")),
+                               radioButtons("data_choice", "Choose",
+                                            choices = c("All", "current Date"), inline = T),
+                               downloadButton("downloadData", "Download"),
+                  ),
+                  mainPanel(
+                    tabsetPanel(
+                      tabPanel("Plot",
+                               fluidRow(
+                                 column(6,
+                                        switchInput("flip", "Flip")),
+                                 column(6,
+                                        radioButtons("plot_switch", " ",
+                                                     choices = c("static"), selected = "static", inline = T))),
+                               uiOutput("plot")),
+                      tabPanel("Data", dataTableOutput("table"))
+                    )
+                  )
+                )
 )
 
-# Define server logic required to draw a histogram
 server <- function(input, output,session) {
   session$onSessionEnded({
-    #print("Stop!")
     stopApp
   })
   
-
   nc <- reactive({
     file <- input$file
     ext <- tools::file_ext(file$datapath)
@@ -99,26 +50,56 @@ server <- function(input, output,session) {
     req(file)
     validate(need(ext == "nc" | ext == "nc4", "Please upload a NetCDF file"))
     
-    nc <- ncdf4::nc_open(file$datapath)
-    #data <- nc
-    #nc_close(nc)
+    
+    shiny::withProgress(
+      message = 'Shiny is busy...',
+      detail = 'Please wait...',
+      value = 0,
+      expr = {nc <- ncdf4::nc_open(file$datapath)}
+    )
+    
+    
     return(nc)
   })
-
   
-  output$downloadData <- downloadHandler(
-    filename = function() {
-      if(input$data_choice == "All"){paste("All data-", input$nc_variables, ".csv", sep="")}else{paste("data-", Time()[Date()], input$nc_variables, ".csv", sep="")}
-    },
-    content = function(file) {
-      if(input$data_choice == "All"){write.csv(Data_All(), file)}else{write.csv(Data(), file)}
+  
+  output$downloadData <- shiny::withProgress(
+    message = 'Downloading Data...',
+    detail = 'Please wait...',
+    value = 0,
+    expr = {
+      downloadHandler(
+        filename = function() {
+          # Generate a unique filename based on user input
+          if (input$data_choice == "All") {
+            filename <- paste("All_data_", Sys.time(), ".csv", sep = "")
+          } else {
+            filename <- paste("data_", Sys.Date(), "_", input$nc_variables, ".csv", sep = "")
+          }
+          return(filename)
+        },
+        content = function(file) {
+          tryCatch({
+            # Generate and save the data
+            if (input$data_choice == "All") {
+              write.csv(Data_All(), file, row.names = F)
+            } else {
+              write.csv(Data(), file)
+            }
+          }, error = function(e) {
+            # Handle errors (e.g., data generation or writing failed)
+            shiny::showNotification("Error downloading data.", type = "error")
+          })
+        }
+      )
     }
   )
   
+  
   output$plot <- renderUI({
     switch (input$plot_switch,
-      "static" = renderPlot(plot_fields(), width = 1000, height = 700),
-      "interactive" = renderPlotly(plot_ggplot())
+            "static" = renderPlot(plot_fields(), width = 1000, height = 700),
+            "interactive" = renderPlotly(plot_ggplot())
     )
   })
   
@@ -137,51 +118,27 @@ server <- function(input, output,session) {
     
     startDate <- str_remove_all(startDate, Units)
     startDate <- str_remove_all(startDate, "since")
-    
-    #startDate <- "1950-01-01 00:00:0.0"
     if(all(Time == 0)){Time<-c(1:length(Time))}
     Time <- as.POSIXct(Time*Modyfier, cal = "gregorian", origin = startDate)
     Time <- as.Date(Time)
-   
+    
     return(Time)
-    #observe(print(Time))
   })
   
   output$UI_date <- renderUI({
-      if(is.null(nc())){return(NULL)}
-      #Time <- ncvar_get(nc(), "time")
-      #startDate <- ncatt_get(nc(), "time", "units")$value
-      #if(str_detect(startDate, "seconds")){Units <- "day"}
-      #if(str_detect(startDate, "hours")){Units <- "day"}
-      #if(str_detect(startDate, "days")){Units <- "month"}
-      #if(str_detect(startDate, "months")){Units <- "month"}
-      
-      #selection <- format(seq.Date(from = as.Date(Time()[1]), 
-      #                             to = as.Date(Time()[length(Time())]), by = Units))
-      
-      #if(!is.null(nc())){selection <- unique(Time())}else{selection <- 1}
-      #dateInput("date", "Date", min = as.Date(Time()[1]), max = as.Date(Time()[length(Time())]))
-      sliderTextInput("date",
-                  "Dates:",
-                  choices = unique(Time()), #selection
-                  #min = as.Date(selection[1]),
-                  #max = as.Date(selection[length(selection)]),
-                  selected =  unique(Time())[1],# as.Date(selection[1]),
-                  #timeFormat="%Y-%m-%d",
-                  animate = TRUE)
-
+    if(is.null(nc())){return(NULL)}
+    sliderTextInput("date",
+                    "Dates:",
+                    choices = unique(Time()),
+                    selected =  unique(Time())[1],
+                    animate = TRUE)
+    
   })
   
   output$UI_depth <- renderUI({
     if(!is.null(nc()$dim$depth) & length(nc()$dim$depth$vals) > 1 ){
-      #depth <- ncvar_get(nc(), "depth");
-      #unit <- nc()$dim$depth$units
       unit <- ncatt_get(nc(), "depth", "units")$value
-      #vals <- round(nc()$dim$depth$vals, 2)
       vals <- round(ncvar_get(nc(), "depth"),2)
-      #sliderInput("depth","Depth",
-      #            min = 1, max = length(depth),
-      #            value = 1, step = 1, labels)
       sliderTextInput("depth", paste("Depth", unit),
                       choices = vals, selected = vals[1], grid = TRUE)
     }else{return(NULL)}
@@ -207,7 +164,7 @@ server <- function(input, output,session) {
     return(var)
   })
   
-
+  
   Latitude <- reactive({
     try(Lat <- ncvar_get(nc(), "latitude"))
     try(Lat <- ncvar_get(nc(), "lat"))
@@ -226,15 +183,28 @@ server <- function(input, output,session) {
   })
   
   Data_All <- reactive({
-    Data <- expand.grid("Lon" = Longitude(), "Lat" = Latitude(), "Time" = Time())
-    #Data <- cbind(Data, "Var" = as.vector(ncvar_get(nc(), as.character(input$nc_variables))))
-    Data <- cbind(Data, "Var" = as.vector(Variable_NC()))
+    
+    shiny::withProgress(
+      message = 'Shiny is busy...',
+      detail = 'Please wait...',
+      value = 0,
+      expr = {
+        Data <- expand.grid("Lon" = Longitude(), "Lat" = Latitude(), "Time" = Time())
+        Data <- cbind(Data, "Var" = as.vector(Variable_NC()))
+      }
+    )
   })
   
   
-  Data <- reactive({
-    Data <- expand.grid("Lon" = Longitude(), "Lat" = Latitude(), "Time" = Time()[Date()])
-    Data <- cbind(Data, "Var" = as.vector(Variable_NC()))
+  Data <- shiny::withProgress(
+    message = 'Shiny is busy...',
+    detail = 'Please wait...',
+    value = 0,
+    expr = {
+      reactive({
+     Data <- expand.grid("Lon" = Longitude(), "Lat" = Latitude(), "Time" = Time()[Date()])
+      Data <- cbind(Data, "Var" = as.vector(Variable_NC()))
+      })
   })
   
   Unit <- reactive({
@@ -247,82 +217,58 @@ server <- function(input, output,session) {
       coord_quickmap()+
       theme_bw()+
       scale_color_viridis_c()
-    
   })
   
   plot_fields <- reactive({
-    var <- Variable_NC()
-    if(length(Variable_NC())==0){return(NULL)}
-    if(input$flip){var <- var[,ncol(var):1]}
-    #observe(print(Longitude()))
-    #observe(print(Latitude()))
-    #if(is.null(Longitude()) | is.null(Latitude()) | is.null(Variable_NC())){return(NULL)}else{
-    fields::image.plot(Longitude(),
-                       Latitude(), 
-                       var,
-                       main = paste(input$nc_variables),
-                       #sub = paste("Mean temp:", list2[i]),
-                       xlab = "Longitude",
-                       ylab = "Latitude",
-                       legend.lab = Unit(),
-                       legend.line = 2.5
-                       #col = magma(200)
-                       ) 
-    #}
+    shiny::withProgress(
+      message = 'Shiny is busy...',
+      detail = 'Please wait...',
+      value = 0,
+      expr = {  var <- Variable_NC()
+      if(length(Variable_NC())==0){return(NULL)}
+      if(input$flip){var <- var[,ncol(var):1]}
+      fields::image.plot(Longitude(),
+                         Latitude(), 
+                         var,
+                         main = paste(input$nc_variables),
+                         #sub = paste("Mean temp:", list2[i]),
+                         xlab = "Longitude",
+                         ylab = "Latitude",
+                         legend.lab = Unit(),
+                         legend.line = 2.5
+      )}
+    )
+    
   })
   
-  output$table <- renderDataTable(Data(),rownames= FALSE,filter = 'top',
-                                  extensions = c('Buttons',"Scroller","FixedColumns"), options = list(
-                                    dom = 'BRfrltpi',
-                                    buttons =
-                                      list('copy', 'print', list(
-                                        extend = 'collection',
-                                        buttons = list(
-                                          list(extend = 'csv', filename = "NC File", 
-                                               exportOptions = list(modifier = list(page = "all"))),
-                                          list(extend = 'excel', filename = "NC File"),
-                                          list(extend = 'pdf', filename = "NC File")),
-                                        text = 'Download'
-                                      )),
-                                    columnDefs = list(list(className = 'dt-center', targets="_all")),
-                                    autoWidth=TRUE,
-                                    rownames= FALSE,
-                                    pageLength = 1000,
-                                    deferRender = TRUE,
-                                    scrollY = 600,
-                                    scroller = TRUE
-                                  ))
-  
-  
-  #output$scatterPlot <- renderPlotly({
-  #  # Sample data (you can replace this with your actual data)
-  #  x <- seq(-180,180, length.out = 100)
-  #  y <- seq(-90,90,  length.out = 100)
-  #  df <- expand.grid(x=x,y=y)
-  #  # Create the scatter plot using plot_ly from the plotly package
-  #  plot_ly(data = df, x = df$x, y = df$y, mode = "markers", opacity = 0) %>%
-  #    layout(dragmode = "select") # Use "select" for rectangular selection
-  #})
-  #
-  ## Observe changes in the selected data points
-  #observeEvent(event_data("plotly_selected"), {
-  #  selected_data <- event_data("plotly_selected")
-  #  
-  #  if (!is.null(selected_data)) {
-  #    x_range <- range(selected_data$x)
-  #    y_range <- range(selected_data$y)
-  #    
-  #    output$selectedValues <- renderPrint({
-  #      paste("Min X:", x_range[1], "Max X:", x_range[2], "Min Y:", y_range[1], "Max Y:", y_range[2])
-  #    })
-  #  } else {
-  #    output$selectedValues <- renderPrint({
-  #      "No points selected."
-  #    })
-  #  }
-  #})
-  
-
+  output$table <- shiny::withProgress(
+    message = 'Shiny is busy...',
+    detail = 'Please wait...',
+    value = 0,
+    expr = {renderDataTable(
+    Data(),rownames= FALSE,filter = 'top',
+      extensions = c('Buttons',"Scroller","FixedColumns"), options = list(
+        dom = 'BRfrltpi',
+        buttons =
+          list('copy', 'print', list(
+            extend = 'collection',
+            buttons = list(
+              list(extend = 'csv', filename = "NC File", 
+                   exportOptions = list(modifier = list(page = "all"))),
+              list(extend = 'excel', filename = "NC File"),
+              list(extend = 'pdf', filename = "NC File")),
+            text = 'Download'
+          )),
+        columnDefs = list(list(className = 'dt-center', targets="_all")),
+        autoWidth=TRUE,
+        rownames= FALSE,
+        pageLength = 1000,
+        deferRender = TRUE,
+        scrollY = 600,
+        scroller = TRUE
+      )
+    )}
+   )
 }
 
 # Run the application 
